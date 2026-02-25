@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<title>Getting Over It – Minimal Demo</title>
+<style>
+
+  html, body {
+
+    margin: 0;
+
+    background: #0f1115;
+
+    color: #e9eef5;
+
+    font-family: system-ui, sans-serif;
+
+    user-select: none;
+
+    -webkit-user-select: none;
+
+    overflow: hidden;
+
+  }
+
+  #ui {
+
+    position: absolute;
+
+    left: 12px;
+
+    top: 10px;
+
+    font-size: 14px;
+
+    line-height: 1.4;
+
+    color: #d7dde7;
+
+    text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+
+  }
+
+  canvas {
+
+    display: block;
+
+    margin: 0 auto;
+
+    background: #f2f5f7;
+
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+
+    touch-action: none; /* viktigt för iPad: låt touch styra muspekaren, inte scroll */
+
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+<div><b>Kontroller:</b> Sikta med mus/touch – hammaren roterar runt spelaren</div>
+<div>Hammartipp mot mark: lägre gravitation + ev. knuff om hastigheten är hög</div>
+<div id="debug"></div>
+</div>
+<canvas id="game" width="920" height="600"></canvas>
+<script>
+
+/* =========================================================
+
+   Getting Over It – Minimal, offline, en-fil-demo
+
+   Funktioner:
+
+   - Fix nivå (polygon)
+
+   - Spelare (cirkel) + hammare (linje + topp-cirkel)
+
+   - Cirkle-line kollisionsdetektion och enkel resolution
+
+   - Ingen studs på mark (bounce=0)
+
+   - Gravity sänks när hammartoppen nuddar mark
+
+   - Om hammartoppens fart > tröskel vid kontakt: spelares v = -hammer_v
+
+   - Högfarts-dämpning i luft, Y dämpas extra för att “känna” gravitation
+
+   ========================================================= */
+
+const canvas = document.getElementById('game');
+
+const ctx = canvas.getContext('2d');
+
+// ===== KAMERA =====
+
+let camX = 0;
+
+let camY = 0;
+
+function updateCamera() {
+
+    // Kamerans målpunkter: spelaren i mitten
+
+    const targetX = player.x - W * 0.5;
+
+    const targetY = player.y - H * 0.5;
+
+    // Smooth camera follow
+
+    camX += (targetX - camX) * 0.15;
+
+    camY += (targetY - camY) * 0.15;
+
+}
+
+const dbg = document.getElementById('debug');
+
+const W = canvas.width;
+
+const H = canvas.height;
+
+// ------- Konstanter / Tuning -------
+
+const PLAYER_RADIUS = 28;
+
+const BASE_GRAVITY = 0.55;
+
+const GRAVITY_WHEN_HOOKED = 0.22;   // sänkt gravitation när hammartoppen nuddar marken
+
+const AIR_DRAG = 0.996;             // generell dämpning i luft (X + Y)
+
+const AIR_DRAG_VERTICAL = 0.990;    // extra dämpning på Y (snabbare Y-förändring än X)
+
+const FLIGHT_SPEED_THRESHOLD = 12;  // när spelarens fart är > detta → extra dämpning
+
+const EXTRA_FLIGHT_DAMP = 0.985;    // extra dämpning vid “flyg/hög fart”
+
+const GROUND_FRICTION = 0.82;       // friktion när spelaren “vilar” på mark
+
+const HAMMER_LENGTH = 140;          // avstånd från spelare till hammartopp
+
+const HAMMER_TIP_R = 10;            // radie på hammartoppen (för kollision)
+
+const PUSH_SPEED_THRESHOLD = 4.0;   // hammartippens farts-tröskel för att “knuffa”
+
+const PUSH_FACTOR = 1.0;            // hur starkt vi kopierar/vänder hammarfarten till spelaren
+
+const PUSH_COOLDOWN_MS = 140;       // förhindra spamknuff varje frame
+const HAMMER_LOCK_SPEED = 5.0;  // under denna fart fastnar hammaren på marken
+const LOCK_RELEASE_SPEED = 10.0; // om spelaren rör sig snabbare än detta släpper lås
+const LOCK_PULL_FACTOR = 1.0;   // styrka på dragkraften när hammaren är låst
+
+// ------- Spelarobjekt -------
+
+const player = {
+
+  x: 0,
+
+  y: 30000,
+
+  vx: 0,
+
+  vy: 0,
+
+  r: PLAYER_RADIUS,
+
+  grounded: false
+
+};
+
+// ------- Hammare -------
+
+const hammer = {
+
+  baseX: player.x,
+
+  baseY: player.y,
+
+  tipX: player.x + HAMMER_LENGTH,
+
+  tipY: player.y,
+
+  lastTipX: null,
+
+  lastTipY: null,
+
+  vx: 0,
+
+  vy: 0,
+
+  touchingGround: false,
+
+  locked: false,
+
+  lastPushTime: 0
+
+};
+
+// ------- Pekarinmatning (mus/touch) -------
+
+const pointer = { x: W/2, y: H/2, active: false };
+// world‑position från föregående frame – används för dragkraft vid lås
+pointer.lastWorldX = pointer.x + camX;
+pointer.lastWorldY = pointer.y + camY;
+
+function setPointerFromEvent(e) {
+
+  const rect = canvas.getBoundingClientRect();
+
+  let cx, cy;
+
+  if (e.touches && e.touches.length > 0) {
+
+    cx = e.touches[0].clientX;
+
+    cy = e.touches[0].clientY;
+
+  } else {
+
+    cx = e.clientX;
+
+    cy = e.clientY;
+
+  }
+
+  pointer.x = cx - rect.left;
+
+  pointer.y = cy - rect.top;
+
+// KONVERTERA MUS/TÖUCH TILL WORLD SPACE
+
+const worldMouseX = pointer.x + camX;
+
+const worldMouseY = pointer.y + camY;
+
+}
+
+canvas.addEventListener('mousemove', e => setPointerFromEvent(e));
+
+canvas.addEventListener('touchstart', e => { e.preventDefault(); setPointerFromEvent(e); pointer.active = true; }, {passive:false});
+
+canvas.addEventListener('touchmove',  e => { e.preventDefault(); setPointerFromEvent(e); }, {passive:false});
+
+canvas.addEventListener('touchend',   e => { e.preventDefault(); pointer.active = false; }, {passive:false});
+
+canvas.addEventListener('mousedown',  () => pointer.active = true);
+
+canvas.addEventListener('mouseup',    () => pointer.active = false);
+
+// ------- Bana (samma varje gång) – polygonlinje -------
+
+const ground = [
+
+  // === LEVEL 0 — THE PIT (botten) ===
+
+  {x: 0, y: 30000},
+
+  {x: 400, y: 29980},
+
+  {x: 700, y: 30020},
+
+  {x: 1100, y: 29950},
+
+  // === LEVEL 1 — DEVIL’S BOTTOM (lt. original) ===
+
+  {x: 1300, y: 29600},
+
+  {x: 1600, y: 29580},
+
+  {x: 2000, y: 29650},
+
+  {x: 2400, y: 29520},
+
+  {x: 2800, y: 29600},
+
+  // === LEVEL 2 — ROCKY OUTCROPS ===
+
+  {x: 3000, y: 29200},
+
+  {x: 3400, y: 29100},
+
+  {x: 3800, y: 29280},
+
+  {x: 4200, y: 29050},
+
+  // === LEVEL 3 — THE WEDGE CHIMNEY (inspirerat av Devil’s Chimney) ===
+
+  {x: 4400, y: 28600},
+
+  {x: 4450, y: 28300},
+
+  {x: 4500, y: 27950},
+
+  {x: 4550, y: 27620},
+
+  {x: 4600, y: 27200},
+
+  {x: 4700, y: 26800},
+
+  {x: 4850, y: 26250},
+
+  {x: 5000, y: 25800},
+
+  // === LEVEL 4 — “ORANGE–LIKE” ROUND WALL ===
+
+  {x: 5400, y: 25200},
+
+  {x: 5800, y: 24900},
+
+  {x: 6200, y: 24700},
+
+  {x: 6700, y: 24550},
+
+  {x: 7200, y: 24600},
+
+  {x: 7600, y: 24780},
+
+  {x: 8000, y: 25000},
+
+  // === LEVEL 5 — BOX TOWER / CRATES region ===
+
+  {x: 8300, y: 24500},
+
+  {x: 8500, y: 24200},
+
+  {x: 8700, y: 23950},
+
+  {x: 9000, y: 23700},
+
+  {x: 9400, y: 23600},
+
+  // === LEVEL 6 — ICE REGION (jättelång backe) ===
+
+  {x: 9800, y: 23200},
+
+  {x: 10200, y: 22800},
+
+  {x: 10700, y: 22500},
+
+  {x: 11200, y: 22100},
+
+  {x: 11800, y: 21800},
+
+  // === LEVEL 7 — SNOW VALLEY ===
+
+  {x: 12400, y: 21400},
+
+  {x: 13000, y: 21000},
+
+  {x: 13600, y: 20650},
+
+  // === LEVEL 8 — THE ANVIL PEAK ===
+
+  {x: 14200, y: 20300},
+
+  {x: 14800, y: 19900},
+
+  {x: 15500, y: 19500},
+
+  {x: 16200, y: 19200},
+
+  // === LEVEL 9 — GOLDEN SUMMIT (toppen) ===
+
+  {x: 17000, y: 18900},
+
+  {x: 18000, y: 18850},
+
+  {x: 19000, y: 18800},
+
+  {x: 20000, y: 18750}
+
+];
+
+// Helper: iterera segment i ground
+
+function forEachSegment(points, fn) {
+
+  for (let i = 0; i < points.length - 1; i++) {
+
+    fn(points[i], points[i+1], i);
+
+  }
+
+}
+
+// ------- Geometri: närmaste punkt på linjesegment till punkt -------
+
+function closestPointOnSegment(px, py, x1, y1, x2, y2) {
+
+  const ax = px - x1, ay = py - y1;
+
+  const bx = x2 - x1, by = y2 - y1;
+
+  const len2 = bx*bx + by*by || 1;
+
+  let t = (ax*bx + ay*by) / len2;
+
+  t = Math.max(0, Math.min(1, t));
+
+  return { x: x1 + t*bx, y: y1 + t*by, t };
+
+}
+
+// ------- Cirkel mot linjesegment: avstånd och normal -------
+
+function circleSegmentPenetration(cx, cy, r, x1, y1, x2, y2) {
+
+  const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
+
+  const dx = cx - cp.x;
+
+  const dy = cy - cp.y;
+
+  const dist = Math.hypot(dx, dy);
+
+  const overlap = r - dist;
+
+  if (overlap > 0) {
+
+    // normal ut från segment (från kontaktpunkten mot cirkelns centrum)
+
+    const nx = dist ? dx/dist : 0;
+
+    const ny = dist ? dy/dist : -1;
+
+    return { hit: true, nx, ny, overlap, cx: cp.x, cy: cp.y, t: cp.t };
+
+  }
+
+  return { hit: false };
+
+}
+
+// ------- Speluppdatering -------
+
+function update(dt) {
+
+  // ensure camera is up-to-date before using it for pointer conversion
+  updateCamera();
+
+  // 1) Uppdatera hammare baserat på siktpunkt
+
+  // KONVERTERA MUS TILL WORLD SPACE (pga kamera)
+  const worldMouseX = pointer.x + camX;
+  const worldMouseY = pointer.y + camY;
+
+  // om hammaren är låst så styrs spelaren med musens rörelse (omvänd)
+  if (hammer.locked) {
+      const dxMouse = worldMouseX - pointer.lastWorldX;
+      const dyMouse = worldMouseY - pointer.lastWorldY;
+      // applicera motsatt kraft på spelaren
+      player.vx -= dxMouse * LOCK_PULL_FACTOR;
+      player.vy -= dyMouse * LOCK_PULL_FACTOR;
+  }
+
+// EXAKT riktning mot musens world position
+
+let dx = worldMouseX - player.x;
+
+let dy = worldMouseY - player.y;
+
+const dist = Math.hypot(dx, dy) || 1;
+
+dx /= dist;
+
+dy /= dist;
+
+// uppdatera hammare
+
+hammer.baseX = player.x;
+
+hammer.baseY = player.y;
+
+// riktning mot mus/world
+let newTipX = player.x + dx * HAMMER_LENGTH;
+let newTipY = player.y + dy * HAMMER_LENGTH;
+
+if (hammer.locked) {
+    // håll exakt samma riktning men tvinga längden att vara konstant
+    const dxLock = hammer.tipX - player.x;
+    const dyLock = hammer.tipY - player.y;
+    const distLock = Math.hypot(dxLock, dyLock) || 1;
+
+    const nx = dxLock / distLock;
+    const ny = dyLock / distLock;
+
+    newTipX = player.x + nx * HAMMER_LENGTH;
+    newTipY = player.y + ny * HAMMER_LENGTH;
+}
+
+// Hammartippens hastighet (per frame)
+if (hammer.lastTipX == null) {
+    hammer.lastTipX = newTipX;
+    hammer.lastTipY = newTipY;
+}
+hammer.vx = newTipX - hammer.lastTipX;
+hammer.vy = newTipY - hammer.lastTipY;
+hammer.lastTipX = newTipX;
+hammer.lastTipY = newTipY;
+
+hammer.tipX = newTipX;
+hammer.tipY = newTipY;
+
+  // 2) Gravity – sänk om hammartoppen nuddar mark
+
+  let hammerTouch = false;
+
+  // 3) Kollisionsdetektion/hantering: hammartopp mot mark + spelare mot mark
+
+  player.grounded = false;
+
+  let effectiveGravity = BASE_GRAVITY;
+
+  // a) hammartoppens kontakt + ev. energikick
+
+  forEachSegment(ground, (a, b) => {
+
+    const tipHit = circleSegmentPenetration(
+        hammer.tipX, hammer.tipY,
+        HAMMER_TIP_R,
+        a.x, a.y,
+        b.x, b.y
+    );
+
+    if (tipHit.hit) {
+        hammerTouch = true;
+
+        // 👉 TRYCK UT HAMMARTOPPEN UR MARKEN
+        hammer.tipX += tipHit.nx * tipHit.overlap;
+        hammer.tipY += tipHit.ny * tipHit.overlap;
+    }
+
+});
+  // Om hammaren inte längre rör vid marken, släpp eventuell låsning
+
+
+  if (hammerTouch) {
+   // === Hammaren fastnar vid låg hastighet ===
+   const tipSpeed = Math.hypot(hammer.vx, hammer.vy);
+   if (tipSpeed < HAMMER_LOCK_SPEED) {
+       // Hammaren rör sig för långsamt -> lås fast den
+       hammer.vx = 0;
+       hammer.vy = 0;
+       hammer.locked = true;
+       // Behåll gravitation reducerad – spelaren "hängs" kvar
+       effectiveGravity = GRAVITY_WHEN_HOOKED;
+   } else {
+       // speed > tröskel: frigör/putta
+       hammer.locked = false;
+       effectiveGravity = GRAVITY_WHEN_HOOKED;
+       const now = performance.now();
+       if (tipSpeed > PUSH_SPEED_THRESHOLD &&
+           (now - hammer.lastPushTime) > PUSH_COOLDOWN_MS) {
+           player.vx = -hammer.vx * PUSH_FACTOR;
+           player.vy = -hammer.vy * PUSH_FACTOR;
+           hammer.lastPushTime = now;
+       }
+   }
+}
+
+  // b) Applicera gravitation på spelaren
+
+  player.vy += effectiveGravity;
+
+  // c) Rörelse
+
+  player.x += player.vx;
+
+  player.y += player.vy;
+
+  // d) Spelare mot varje marksegment – pressa ut, ingen studs
+
+  forEachSegment(ground, (a, b) => {
+
+    const hit = circleSegmentPenetration(player.x, player.y, player.r, a.x, a.y, b.x, b.y);
+
+    if (hit.hit) {
+
+      // Flytta ut spelare längs normal
+
+      player.x += hit.nx * hit.overlap;
+
+      player.y += hit.ny * hit.overlap;
+
+      // Ingen studs: nolla komponent längs normalen om spelaren rör sig in i ytan
+
+      const vn = player.vx * hit.nx + player.vy * hit.ny;
+
+      if (vn < 0) {
+
+        // ta bort normal-komponenten
+
+        player.vx -= vn * hit.nx;
+
+        player.vy -= vn * hit.ny;
+
+      }
+
+      // Markkontakt → friktion
+
+      player.grounded = true;
+
+    }
+
+  });
+
+  // e) Friktion när grounded (ingen studs)
+
+  if (player.grounded) {
+
+    player.vy = Math.min(player.vy, 0); // håll fast mot ytan, ingen studs
+
+    player.vx *= GROUND_FRICTION;
+
+  } else {
+
+    // Luftdämpning – särskilt på Y för att “känna” gravitation först
+
+    player.vx *= AIR_DRAG;
+
+    player.vy *= AIR_DRAG_VERTICAL;
+
+    // Extra dämpning vid hög flygfart
+
+    const speed = Math.hypot(player.vx, player.vy);
+
+    if (speed > FLIGHT_SPEED_THRESHOLD) {
+
+      player.vx *= EXTRA_FLIGHT_DAMP;
+
+      player.vy *= EXTRA_FLIGHT_DAMP;
+
+    }
+
+  }
+
+  // 4) Håll spelare inom canvas (enkel vägg)
+
+if (player.y > ground[0].y + 1000) {
+
+    // respawn vid botten
+
+    player.x = ground[0].x + 200;
+
+    player.y = ground[0].y - 200;
+
+    player.vx = 0;
+
+    player.vy = 0;
+
+}
+
+  // släpp lås om spelaren rör sig tillräckligt snabbt
+  if (hammer.locked) {
+      const playerSpeed = Math.hypot(player.vx, player.vy);
+      if (playerSpeed > LOCK_RELEASE_SPEED) {
+          hammer.locked = false;
+      }
+  }
+
+  hammer.touchingGround = hammerTouch;
+
+  // Debug
+
+  dbg.textContent =
+
+    `HammerSpeed: ${Math.hypot(hammer.vx, hammer.vy).toFixed(2)} | ` +
+
+    `Touch: ${hammer.touchingGround ? 'Ja' : 'Nej'} | ` +
+
+    `Locked: ${hammer.locked ? 'Ja' : 'Nej'} | ` +
+
+    `G: ${effectiveGravity.toFixed(2)} | ` +
+
+    `Player v=(${player.vx.toFixed(2)}, ${player.vy.toFixed(2)})`;
+
+updateCamera();
+  // uppdatera senaste världsmusposition för nästa frame
+  pointer.lastWorldX = worldMouseX;
+  pointer.lastWorldY = worldMouseY;
+}
+
+// ------- Rita -------
+
+function draw() {
+
+  ctx.clearRect(0, 0, W, H);
+
+ctx.save();
+
+ctx.translate(-camX, -camY);
+
+  // Bakgrundsgradering
+
+  const g = ctx.createLinearGradient(0,0,0,H);
+
+  g.addColorStop(0, '#e5eff9');
+
+  g.addColorStop(1, '#dae3ea');
+
+  ctx.fillStyle = g;
+
+  ctx.fillRect(0,0,W,H);
+
+  // Bana
+
+  ctx.lineWidth = 6;
+
+  ctx.strokeStyle = '#3c4048';
+
+  ctx.beginPath();
+
+  ctx.moveTo(ground[0].x, ground[0].y);
+
+  for (let i=1; i<ground.length; i++) {
+
+    ctx.lineTo(ground[i].x, ground[i].y);
+
+  }
+
+  ctx.stroke();
+
+  // Spelare (cirkel)
+
+  ctx.beginPath();
+
+  ctx.arc(player.x, player.y, player.r, 0, Math.PI*2);
+
+  ctx.fillStyle = '#ef8f2f';
+
+  ctx.fill();
+
+  ctx.lineWidth = 3;
+
+  ctx.strokeStyle = '#b8691d';
+
+  ctx.stroke();
+
+  // Hammare (linje + topp)
+
+  ctx.lineWidth = 10;
+
+  ctx.strokeStyle = hammer.touchingGround ? '#0ea5e9' : '#7a4b2e';
+
+  ctx.beginPath();
+
+  ctx.moveTo(hammer.baseX, hammer.baseY);
+
+  ctx.lineTo(hammer.tipX, hammer.tipY);
+
+  ctx.stroke();
+
+  // Hammartopp (kontaktpunkt)
+
+  ctx.beginPath();
+
+  ctx.arc(hammer.tipX, hammer.tipY, HAMMER_TIP_R, 0, Math.PI*2);
+
+  ctx.fillStyle = hammer.touchingGround ? '#22c55e' : '#8b5a37';
+
+  ctx.fill();
+
+  // HUD-snutt: markera att gravitation sänks vid hook
+
+  if (hammer.touchingGround) {
+
+    ctx.fillStyle = 'rgba(34,197,94,0.15)';
+
+    ctx.beginPath();
+
+    ctx.arc(player.x, player.y, player.r + 22, 0, Math.PI*2);
+
+    ctx.fill();
+
+  }
+
+ctx.restore();
+
+}
+
+// ------- Loop -------
+
+let last = performance.now();
+
+function loop(now) {
+
+  const dt = (now - last) / 1000;
+
+  last = now;
+
+  update(dt);
+
+  draw();
+
+  requestAnimationFrame(loop);
+
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
+ 
