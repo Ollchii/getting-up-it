@@ -41,13 +41,19 @@
 
   }
 
-canvas {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  display: block;
-}
+  canvas {
+
+    display: block;
+
+    margin: 0 auto;
+
+    background: #f2f5f7;
+
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+
+    touch-action: none; /* viktigt för iPad: låt touch styra muspekaren, inte scroll */
+
+  }
 </style>
 </head>
 <body>
@@ -56,7 +62,7 @@ canvas {
 <div>Hammartipp mot mark: lägre gravitation + ev. knuff om hastigheten är hög</div>
 <div id="debug"></div>
 </div>
-<canvas id="game"></canvas>
+<canvas id="game" width="920" height="600"></canvas>
 <script>
 
 /* =========================================================
@@ -84,13 +90,6 @@ canvas {
 const canvas = document.getElementById('game');
 
 const ctx = canvas.getContext('2d');
-  function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-}
-
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
 
 // ===== KAMERA =====
 
@@ -116,8 +115,9 @@ function updateCamera() {
 
 const dbg = document.getElementById('debug');
 
-function getW() { return canvas.width; }
-function getH() { return canvas.height; }
+const W = canvas.width;
+
+const H = canvas.height;
 
 // ------- Konstanter / Tuning -------
 
@@ -198,7 +198,7 @@ const hammer = {
 
 // ------- Pekarinmatning (mus/touch) -------
 
-const pointer = { x: canvas.width/2, y: canvas.height/2, active: false };
+const pointer = { x: W/2, y: H/2, active: false };
 // world‑position från föregående frame – används för dragkraft vid lås
 pointer.lastWorldX = pointer.x + camX;
 pointer.lastWorldY = pointer.y + camY;
@@ -684,7 +684,7 @@ updateCamera();
 
 function draw() {
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, W, H);
 
 ctx.save();
 
@@ -800,6 +800,3 @@ requestAnimationFrame(loop);
 </script>
 </body>
 </html>
-
- 
-
