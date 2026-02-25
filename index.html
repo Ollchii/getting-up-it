@@ -84,6 +84,13 @@ canvas {
 const canvas = document.getElementById('game');
 
 const ctx = canvas.getContext('2d');
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
 
 // ===== KAMERA =====
 
@@ -109,9 +116,8 @@ function updateCamera() {
 
 const dbg = document.getElementById('debug');
 
-const W = canvas.width;
-
-const H = canvas.height;
+function getW() { return canvas.width; }
+function getH() { return canvas.height; }
 
 // ------- Konstanter / Tuning -------
 
@@ -192,7 +198,7 @@ const hammer = {
 
 // ------- Pekarinmatning (mus/touch) -------
 
-const pointer = { x: W/2, y: H/2, active: false };
+const pointer = { x: canvas.width/2, y: canvas.height/2, active: false };
 // world‑position från föregående frame – används för dragkraft vid lås
 pointer.lastWorldX = pointer.x + camX;
 pointer.lastWorldY = pointer.y + camY;
@@ -678,7 +684,7 @@ updateCamera();
 
 function draw() {
 
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
 ctx.save();
 
@@ -796,3 +802,4 @@ requestAnimationFrame(loop);
 </html>
 
  
+
