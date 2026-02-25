@@ -41,19 +41,13 @@
 
   }
 
-  canvas {
-
-    display: block;
-
-    margin: 0 auto;
-
-    background: #f2f5f7;
-
-    box-shadow: 0 0 30px rgba(0,0,0,0.5);
-
-    touch-action: none; /* viktigt för iPad: låt touch styra muspekaren, inte scroll */
-
-  }
+canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
 </style>
 </head>
 <body>
@@ -62,7 +56,7 @@
 <div>Hammartipp mot mark: lägre gravitation + ev. knuff om hastigheten är hög</div>
 <div id="debug"></div>
 </div>
-<canvas id="game" width="920" height="600"></canvas>
+<canvas id="game"></canvas>
 <script>
 
 /* =========================================================
@@ -800,4 +794,5 @@ requestAnimationFrame(loop);
 </script>
 </body>
 </html>
+
  
